@@ -27,6 +27,30 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    /* Tata letak sidebar agar footnote otomatis turun ke pojok kiri bawah */
+    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] {
+        display: flex;
+        flex-direction: column;
+        min-height: calc(100vh - 6rem);
+    }
+    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] > div[data-testid="stVerticalBlock"] {
+        flex: 1 1 auto;
+        display: flex;
+        flex-direction: column;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] > div[data-testid="stVerticalBlock"] > div:last-child {
+        margin-top: auto !important;
+        padding-top: 24px;
+    }
+
+    /* Footnote nama anggota di pojok kiri bawah sidebar */
+    .sidebar-footnote {
+        font-size: 0.72rem;
+        line-height: 1.5;
+        color: #888888;
+        text-align: left;
+    }
+
     /* Paksa kolom switch vertikal & tulisan menu tetap sejajar horizontal (termasuk di HP) */
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
         flex-wrap: nowrap !important;
@@ -67,15 +91,36 @@ st.markdown(
         transition: top 0.25s ease, background 0.25s ease;
     }
 
-    /* Tombol teks menu di samping switch sejajar presisi dengan 3 posisi knob */
+    /* Teks menu di samping switch tanpa kotak frame/border/background */
     section[data-testid="stSidebar"] .stButton > button {
         height: 44px !important;
         min-height: 44px !important;
-        padding: 0 14px !important;
+        padding: 0 6px !important;
         justify-content: flex-start !important;
         text-align: left !important;
-        border-radius: 10px !important;
-        font-weight: 600 !important;
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: inherit !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button[kind="primary"],
+    section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-primary"] {
+        font-weight: 700 !important;
+        opacity: 1 !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button[kind="secondary"],
+    section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-secondary"] {
+        font-weight: 400 !important;
+        opacity: 0.72 !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button:hover,
+    section[data-testid="stSidebar"] .stButton > button:focus,
+    section[data-testid="stSidebar"] .stButton > button:active {
+        background: transparent !important;
+        border: none !important;
+        box-shadow: none !important;
+        color: inherit !important;
+        opacity: 1 !important;
     }
 
     /* Daftar pilihan di dalam dropdown popover rata kiri */
@@ -501,7 +546,7 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
 
 
 # ==============================================================================
-# SIDEBAR KIRI: JUDUL PIPELINE & 1 SWITCH VERTIKAL 3 POSISI DI SAMPING TULISAN
+# SIDEBAR KIRI: JUDUL PIPELINE, SWITCH VERTIKAL 3 POSISI & FOOTNOTE
 # ==============================================================================
 with st.sidebar:
     st.markdown("### EEG Signal Processing")
@@ -540,6 +585,17 @@ with st.sidebar:
             ):
                 st.session_state.active_menu = opt
                 st.rerun()
+
+    st.markdown(
+        """
+        <div class="sidebar-footnote">
+            Risyadul Arief Arsalan<br>
+            Imanda Irham<br>
+            Amrina Rasyada
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 menu = st.session_state.active_menu
 base_dir = os.path.dirname(os.path.abspath(__file__))
@@ -597,10 +653,8 @@ if menu == "1. Paper":
         st.markdown(
             """
             <div class="a4-paper-slot">
-                <h3 style="margin-bottom: 12px; color: #333333;">Paper Slot (A4)</h3>
-                <p style="font-size: 14px; color: #777777; max-width: 420px;">
-                    Dokumen paper belum tersedia. Tambahkan file <b>.pdf</b> ke folder
-                    <code>paper/</code> di repositori GitHub agar otomatis tampil di sini.
+                <p style="font-size: 18px; font-weight: 500; color: #666666; margin: 0;">
+                    paper: not ready yet
                 </p>
             </div>
             """,
