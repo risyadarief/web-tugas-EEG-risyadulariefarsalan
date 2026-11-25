@@ -71,10 +71,12 @@ def format_channel_label(ch_code):
 
 def get_local_dataset_files(root_dir):
     valid_exts = ('.dat', '.txt', '.csv', '.mat')
+    ignored_files = {'requirements.txt', 'readme.txt', 'license.txt'}
     file_list = []
-    for root, _, files in os.walk(root_dir):
+    for root, dirs, files in os.walk(root_dir):
+        dirs[:] = [d for d in dirs if not d.startswith('.')]
         for f in sorted(files):
-            if f.lower().endswith(valid_exts):
+            if f.lower().endswith(valid_exts) and f.lower() not in ignored_files:
                 file_list.append(os.path.join(root, f))
     return file_list
 
