@@ -27,81 +27,94 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Tata letak sidebar agar footnote otomatis turun ke pojok kiri bawah */
-    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] {
-        display: flex;
-        flex-direction: column;
-        min-height: calc(100vh - 6rem);
-    }
-    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] > div[data-testid="stVerticalBlock"] {
-        flex: 1 1 auto;
-        display: flex;
-        flex-direction: column;
-    }
-    section[data-testid="stSidebar"] div[data-testid="stSidebarUserContent"] > div[data-testid="stVerticalBlock"] > div:last-child {
-        margin-top: auto !important;
-        padding-top: 24px;
-    }
-
-    /* Footnote nama anggota di pojok kiri bawah sidebar */
+    /* Footnote nama anggota rapat di pojok kiri bawah sidebar */
     .sidebar-footnote {
-        font-size: 0.72rem;
-        line-height: 1.5;
+        position: fixed;
+        bottom: 10px;
+        left: 12px;
+        font-size: 0.62rem;
+        line-height: 1.35;
         color: #888888;
         text-align: left;
+        z-index: 10;
+        pointer-events: none;
+    }
+    section[data-testid="stSidebar"][aria-expanded="false"] .sidebar-footnote {
+        display: none !important;
     }
 
-    /* Paksa kolom switch vertikal & tulisan menu tetap sejajar horizontal (termasuk di HP) */
+    /* Paksa kolom switch vertikal & tulisan menu tetap sejajar horizontal & rapat */
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
         flex-wrap: nowrap !important;
         align-items: flex-start !important;
-        gap: 10px !important;
+        gap: 6px !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:first-child {
-        flex: 0 0 46px !important;
-        min-width: 46px !important;
-        max-width: 46px !important;
+        flex: 0 0 28px !important;
+        min-width: 28px !important;
+        max-width: 28px !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:last-child {
         flex: 1 1 auto !important;
         min-width: 0 !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] div[data-testid="stVerticalBlock"] {
-        gap: 10px !important;
+        gap: 0px !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stElementContainer {
+        margin: 0 !important;
+        padding: 0 !important;
     }
 
-    /* 1 Switch Vertikal 3 Posisi (Merah / Kuning-Oranye / Hijau) */
+    /* 1 Switch Vertikal 3 Posisi ukuran kecil (Merah / Kuning-Oranye / Hijau) */
     .v-switch-track {
         position: relative;
-        width: 42px;
-        height: 152px;
+        width: 24px;
+        height: 84px;
         border-radius: 999px;
         background: linear-gradient(90deg, #9ca3af 0%, #e5e7eb 52%, #ffffff 100%);
         border: 1px solid #9ca3af;
-        box-shadow: inset 2px 0 6px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.12);
+        box-shadow: inset 1.5px 0 4px rgba(0, 0, 0, 0.25), 0 1px 4px rgba(0, 0, 0, 0.12);
         box-sizing: border-box;
     }
     .v-switch-knob {
         position: absolute;
-        left: 3px;
-        width: 34px;
-        height: 34px;
+        left: 2px;
+        width: 18px;
+        height: 18px;
         border-radius: 50%;
-        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32), inset 0 2px 3px rgba(255, 255, 255, 0.35);
-        transition: top 0.25s ease, background 0.25s ease;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.32), inset 0 1px 2px rgba(255, 255, 255, 0.35);
+        transition: top 0.22s ease, background 0.22s ease;
     }
 
-    /* Teks menu di samping switch tanpa kotak frame/border/background */
+    /* Teks menu di samping switch tanpa frame, rata kiri sejajar vertikal & mendekati switch */
+    section[data-testid="stSidebar"] .stButton {
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
     section[data-testid="stSidebar"] .stButton > button {
-        height: 44px !important;
-        min-height: 44px !important;
-        padding: 0 6px !important;
+        width: 100% !important;
+        height: 28px !important;
+        min-height: 28px !important;
+        padding: 0 4px !important;
+        margin: 0 !important;
+        display: flex !important;
+        align-items: center !important;
         justify-content: flex-start !important;
         text-align: left !important;
         background: transparent !important;
         border: none !important;
         box-shadow: none !important;
         color: inherit !important;
+    }
+    section[data-testid="stSidebar"] .stButton > button > div,
+    section[data-testid="stSidebar"] .stButton > button p {
+        width: 100% !important;
+        text-align: left !important;
+        margin: 0 !important;
+        line-height: 1.2 !important;
+        font-size: 0.9rem !important;
     }
     section[data-testid="stSidebar"] .stButton > button[kind="primary"],
     section[data-testid="stSidebar"] .stButton > button[data-testid="stBaseButton-primary"] {
@@ -546,7 +559,7 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
 
 
 # ==============================================================================
-# SIDEBAR KIRI: JUDUL PIPELINE, SWITCH VERTIKAL 3 POSISI & FOOTNOTE
+# SIDEBAR KIRI: JUDUL PIPELINE, SWITCH VERTIKAL KECIL & FOOTNOTE POJOK BAWAH
 # ==============================================================================
 with st.sidebar:
     st.markdown("### EEG Signal Processing")
@@ -557,14 +570,14 @@ with st.sidebar:
     st.divider()
 
     active_idx = MENU_OPTIONS.index(st.session_state.active_menu)
-    knob_top_px = [5, 59, 113][active_idx]
+    knob_top_px = [4, 32, 60][active_idx]
     knob_gradient = [
         "radial-gradient(circle at 35% 35%, #ef4444, #b91c1c)",  # Merah (1. Paper)
         "radial-gradient(circle at 35% 35%, #fde047, #f97316)",  # Kuning-Oranye (2. Database)
         "radial-gradient(circle at 35% 35%, #a3e635, #65a30d)",  # Hijau (3. Upload)
     ][active_idx]
 
-    col_sw, col_menu = st.columns([0.24, 0.76])
+    col_sw, col_menu = st.columns([0.16, 0.84])
     with col_sw:
         st.markdown(
             f"""
@@ -589,9 +602,9 @@ with st.sidebar:
     st.markdown(
         """
         <div class="sidebar-footnote">
-            Risyadul Arief Arsalan<br>
-            Imanda Irham<br>
-            Amrina Rasyada
+            risyadul arief arsalan<br>
+            imanda irham<br>
+            amrina rasyada
         </div>
         """,
         unsafe_allow_html=True,
@@ -654,7 +667,7 @@ if menu == "1. Paper":
             """
             <div class="a4-paper-slot">
                 <p style="font-size: 18px; font-weight: 500; color: #666666; margin: 0;">
-                    paper: not ready yet
+                    not ready yet
                 </p>
             </div>
             """,
