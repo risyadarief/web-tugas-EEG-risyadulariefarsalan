@@ -43,16 +43,17 @@ st.markdown(
         display: none !important;
     }
 
-    /* Paksa kolom switch vertikal & tulisan menu tetap sejajar horizontal & rapat */
+    /* Paksa kolom switch vertikal & tulisan menu rapat ke kiri */
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
         flex-wrap: nowrap !important;
         align-items: flex-start !important;
-        gap: 6px !important;
+        gap: 8px !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:first-child {
-        flex: 0 0 28px !important;
-        min-width: 28px !important;
-        max-width: 28px !important;
+        flex: 0 0 26px !important;
+        width: 26px !important;
+        min-width: 26px !important;
+        max-width: 26px !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:last-child {
         flex: 1 1 auto !important;
@@ -60,10 +61,12 @@ st.markdown(
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] div[data-testid="stVerticalBlock"] {
         gap: 0px !important;
+        align-items: flex-start !important;
     }
     section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] .stElementContainer {
         margin: 0 !important;
         padding: 0 !important;
+        width: auto !important;
     }
 
     /* 1 Switch Vertikal 3 Posisi ukuran kecil (Merah / Kuning-Oranye / Hijau) */
@@ -87,19 +90,21 @@ st.markdown(
         transition: top 0.22s ease, background 0.22s ease;
     }
 
-    /* Teks menu di samping switch tanpa frame, rata kiri sejajar vertikal & mendekati switch */
+    /* Teks menu rapat ke kiri tepat di samping switch */
     section[data-testid="stSidebar"] .stButton {
-        width: 100% !important;
+        width: auto !important;
         margin: 0 !important;
         padding: 0 !important;
+        display: flex !important;
+        justify-content: flex-start !important;
     }
     section[data-testid="stSidebar"] .stButton > button {
-        width: 100% !important;
+        width: auto !important;
         height: 28px !important;
         min-height: 28px !important;
-        padding: 0 4px !important;
+        padding: 0 2px !important;
         margin: 0 !important;
-        display: flex !important;
+        display: inline-flex !important;
         align-items: center !important;
         justify-content: flex-start !important;
         text-align: left !important;
@@ -108,10 +113,9 @@ st.markdown(
         box-shadow: none !important;
         color: inherit !important;
     }
-    section[data-testid="stSidebar"] .stButton > button > div,
-    section[data-testid="stSidebar"] .stButton > button p {
-        width: 100% !important;
+    section[data-testid="stSidebar"] .stButton > button * {
         text-align: left !important;
+        justify-content: flex-start !important;
         margin: 0 !important;
         line-height: 1.2 !important;
         font-size: 0.9rem !important;
@@ -593,7 +597,7 @@ with st.sidebar:
             if st.button(
                 opt,
                 key=f"nav_{opt}",
-                use_container_width=True,
+                use_container_width=False,
                 type="primary" if is_active else "secondary",
             ):
                 st.session_state.active_menu = opt
