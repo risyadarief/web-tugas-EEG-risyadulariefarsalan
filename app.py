@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import re
@@ -10,6 +11,11 @@ from scipy.io import loadmat
 from scipy.signal import firwin, filtfilt, medfilt
 from scipy.stats import chi2
 
+try:
+    import fitz  # PyMuPDF untuk render halaman PDF agar tampil mulus di HP & Laptop
+except ImportError:
+    fitz = None
+
 # ==============================================================================
 # KONFIGURASI HALAMAN WEB & CSS KUSTOM
 # ==============================================================================
@@ -21,6 +27,57 @@ st.set_page_config(
 st.markdown(
     """
     <style>
+    /* Paksa kolom switch vertikal & tulisan menu tetap sejajar horizontal (termasuk di HP) */
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] {
+        flex-wrap: nowrap !important;
+        align-items: flex-start !important;
+        gap: 10px !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:first-child {
+        flex: 0 0 46px !important;
+        min-width: 46px !important;
+        max-width: 46px !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] > div[data-testid="stColumn"]:last-child {
+        flex: 1 1 auto !important;
+        min-width: 0 !important;
+    }
+    section[data-testid="stSidebar"] div[data-testid="stHorizontalBlock"] div[data-testid="stVerticalBlock"] {
+        gap: 10px !important;
+    }
+
+    /* 1 Switch Vertikal 3 Posisi (Merah / Kuning-Oranye / Hijau) */
+    .v-switch-track {
+        position: relative;
+        width: 42px;
+        height: 152px;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #9ca3af 0%, #e5e7eb 52%, #ffffff 100%);
+        border: 1px solid #9ca3af;
+        box-shadow: inset 2px 0 6px rgba(0, 0, 0, 0.25), 0 2px 6px rgba(0, 0, 0, 0.12);
+        box-sizing: border-box;
+    }
+    .v-switch-knob {
+        position: absolute;
+        left: 3px;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.32), inset 0 2px 3px rgba(255, 255, 255, 0.35);
+        transition: top 0.25s ease, background 0.25s ease;
+    }
+
+    /* Tombol teks menu di samping switch sejajar presisi dengan 3 posisi knob */
+    section[data-testid="stSidebar"] .stButton > button {
+        height: 44px !important;
+        min-height: 44px !important;
+        padding: 0 14px !important;
+        justify-content: flex-start !important;
+        text-align: left !important;
+        border-radius: 10px !important;
+        font-weight: 600 !important;
+    }
+
     /* Daftar pilihan di dalam dropdown popover rata kiri */
     div[data-testid="stPopoverBody"] .stButton > button {
         justify-content: flex-start !important;
@@ -35,12 +92,12 @@ st.markdown(
         max-width: 96vw !important;
     }
 
-    /* Slot kosong berbentuk kertas A4 */
+    /* Slot kosong & tampilan halaman kertas A4 */
     .a4-paper-slot {
         width: 100%;
         max-width: 794px;
         aspect-ratio: 210 / 297;
-        margin: 16px auto 32px auto;
+        margin: 16px auto 24px auto;
         background-color: #ffffff;
         color: #555555;
         border: 1px solid #d0d7de;
@@ -54,37 +111,39 @@ st.markdown(
         padding: 48px;
         box-sizing: border-box;
     }
+    .a4-paper-page {
+        width: 100%;
+        max-width: 794px;
+        margin: 0 auto 18px auto;
+        background-color: #ffffff;
+        border: 1px solid #d0d7de;
+        border-radius: 4px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        overflow: hidden;
+    }
+    .a4-paper-page img {
+        display: block;
+        width: 100%;
+        height: auto;
+    }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 # ==============================================================================
-# INISIALISASI SESSION STATE (SWITCH MENU & DROPDOWN)
+# INISIALISASI SESSION STATE
 # ==============================================================================
 MENU_OPTIONS = ["1. Paper", "2. Database", "3. Upload"]
 
 if "active_menu" not in st.session_state:
     st.session_state.active_menu = "1. Paper"
-
-for opt in MENU_OPTIONS:
-    switch_key = f"switch_{opt}"
-    if switch_key not in st.session_state:
-        st.session_state[switch_key] = (st.session_state.active_menu == opt)
-
 if "db_file_idx" not in st.session_state:
     st.session_state.db_file_idx = 0
 if "db_ch_idx" not in st.session_state:
     st.session_state.db_ch_idx = 0
 if "up_ch_idx" not in st.session_state:
     st.session_state.up_ch_idx = 0
-
-
-def on_switch_menu(chosen_menu):
-    st.session_state.active_menu = chosen_menu
-    for opt in MENU_OPTIONS:
-        st.session_state[f"switch_{opt}"] = (opt == chosen_menu)
-
 
 EEG_CHANNEL_FULL_NAMES = {
     'FP1': 'Left Frontopolar',
@@ -148,6 +207,32 @@ def get_local_dataset_files(root_dir):
             if f.lower().endswith(valid_exts) and f.lower() not in ignored_files:
                 file_list.append(os.path.join(root, f))
     return file_list
+
+
+def get_paper_pdf_path(root_dir):
+    """Mencari otomatis file PDF paper di folder 'paper/' terlebih dahulu, lalu folder utama."""
+    paper_dir = os.path.join(root_dir, "paper")
+    if os.path.isdir(paper_dir):
+        for f in sorted(os.listdir(paper_dir)):
+            if f.lower().endswith(".pdf"):
+                return os.path.join(paper_dir, f)
+    for f in sorted(os.listdir(root_dir)):
+        if f.lower().endswith(".pdf"):
+            return os.path.join(root_dir, f)
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def render_pdf_pages_as_b64(pdf_bytes):
+    if fitz is None:
+        return None
+    pages = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for page in doc:
+        pix = page.get_pixmap(dpi=160)
+        pages.append(base64.b64encode(pix.tobytes("png")).decode("utf-8"))
+    doc.close()
+    return pages
 
 
 @st.cache_data(show_spinner=False)
@@ -416,7 +501,7 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
 
 
 # ==============================================================================
-# SIDEBAR KIRI: JUDUL PIPELINE & 3 SWITCH NAVIGASI
+# SIDEBAR KIRI: JUDUL PIPELINE & 1 SWITCH VERTIKAL 3 POSISI DI SAMPING TULISAN
 # ==============================================================================
 with st.sidebar:
     st.markdown("### EEG Signal Processing")
@@ -425,34 +510,102 @@ with st.sidebar:
         "Signal Space Projection (SSP) & Mahalanobis Distance"
     )
     st.divider()
-    for opt in MENU_OPTIONS:
-        st.toggle(
-            opt,
-            key=f"switch_{opt}",
-            on_change=on_switch_menu,
-            args=(opt,),
+
+    active_idx = MENU_OPTIONS.index(st.session_state.active_menu)
+    knob_top_px = [5, 59, 113][active_idx]
+    knob_gradient = [
+        "radial-gradient(circle at 35% 35%, #ef4444, #b91c1c)",  # Merah (1. Paper)
+        "radial-gradient(circle at 35% 35%, #fde047, #f97316)",  # Kuning-Oranye (2. Database)
+        "radial-gradient(circle at 35% 35%, #a3e635, #65a30d)",  # Hijau (3. Upload)
+    ][active_idx]
+
+    col_sw, col_menu = st.columns([0.24, 0.76])
+    with col_sw:
+        st.markdown(
+            f"""
+            <div class="v-switch-track">
+                <div class="v-switch-knob" style="top: {knob_top_px}px; background: {knob_gradient};"></div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
+    with col_menu:
+        for opt in MENU_OPTIONS:
+            is_active = (st.session_state.active_menu == opt)
+            if st.button(
+                opt,
+                key=f"nav_{opt}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                st.session_state.active_menu = opt
+                st.rerun()
 
 menu = st.session_state.active_menu
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_files = get_local_dataset_files(base_dir)
+paper_pdf_path = get_paper_pdf_path(base_dir)
 
 
 # ==============================================================================
-# BAGIAN TENGAH 1: PAPER (SLOT KOSONG KERTAS A4)
+# BAGIAN TENGAH 1: PAPER (OTOMATIS TAMPIL DARI GITHUB + DOWNLOAD PAPER)
 # ==============================================================================
 if menu == "1. Paper":
-    st.markdown(
-        """
-        <div class="a4-paper-slot">
-            <h3 style="margin-bottom: 12px; color: #333333;">Paper Slot (A4)</h3>
-            <p style="font-size: 14px; color: #777777;">
-                Dokumen paper akan ditampilkan di area ini.
-            </p>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    if paper_pdf_path is not None:
+        paper_filename = os.path.basename(paper_pdf_path)
+        with open(paper_pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        pages_b64 = render_pdf_pages_as_b64(pdf_bytes)
+        if pages_b64:
+            for page_b64 in pages_b64:
+                st.markdown(
+                    f"""
+                    <div class="a4-paper-page">
+                        <img src="data:image/png;base64,{page_b64}" />
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+        else:
+            # Fallback jika PyMuPDF belum terinstal di environment
+            pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
+            st.markdown(
+                f"""
+                <div style="max-width: 794px; margin: 0 auto 20px auto;">
+                    <iframe src="data:application/pdf;base64,{pdf_b64}"
+                            width="100%" height="960"
+                            style="border: 1px solid #d0d7de; border-radius: 4px;">
+                    </iframe>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+        # Tombol Download Paper di bawah tampilan paper
+        _, dl_col, _ = st.columns([1, 2, 1])
+        with dl_col:
+            st.download_button(
+                label=f"Download Paper ({paper_filename})",
+                data=pdf_bytes,
+                file_name=paper_filename,
+                mime="application/pdf",
+                use_container_width=True,
+                key="dl_paper_pdf",
+            )
+    else:
+        st.markdown(
+            """
+            <div class="a4-paper-slot">
+                <h3 style="margin-bottom: 12px; color: #333333;">Paper Slot (A4)</h3>
+                <p style="font-size: 14px; color: #777777; max-width: 420px;">
+                    Dokumen paper belum tersedia. Tambahkan file <b>.pdf</b> ke folder
+                    <code>paper/</code> di repositori GitHub agar otomatis tampil di sini.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
 
 # ==============================================================================
