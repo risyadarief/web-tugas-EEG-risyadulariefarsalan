@@ -6,30 +6,39 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import streamlit as st
+import streamlit.components.v1 as components
 from scipy.io import loadmat
 from scipy.signal import firwin, filtfilt, medfilt
 from scipy.stats import chi2
 
 # ==============================================================================
-# KONFIGURASI HALAMAN WEB & CSS KUSTOM
+# KONFIGURASI HALAMAN WEB, CSS KUSTOM & SCRIPT MOBILE (NO KEYBOARD + ZOOM)
 # ==============================================================================
 st.set_page_config(
     page_title="EEG Signal Processing Pipeline",
     layout="wide",
 )
 
-# Mengunci input teks pada semua Selectbox (hanya bisa dipilih, tidak bisa diketik/dihapus)
 st.markdown(
     """
     <style>
+    /* Izinkan gesture pinch-to-zoom di seluruh halaman */
+    html, body, .stApp {
+        touch-action: pan-x pan-y pinch-zoom !important;
+    }
+
+    /* Hilangkan kursor ketik dan blokir interaksi teks pada semua Selectbox */
     div[data-baseweb="select"] input {
         caret-color: transparent !important;
         pointer-events: none !important;
         user-select: none !important;
+        -webkit-user-select: none !important;
     }
     div[data-baseweb="select"] {
         cursor: pointer !important;
     }
+
+    /* Slot kosong berbentuk kertas A4 untuk menu Paper */
     .a4-paper-slot {
         width: 100%;
         max-width: 794px;
@@ -51,6 +60,54 @@ st.markdown(
     </style>
     """,
     unsafe_allow_html=True,
+)
+
+# Script untuk: (1) mengaktifkan pinch-zoom batas 1x - 3x, (2) mencegah keyboard HP muncul di selectbox
+components.html(
+    """
+    <script>
+    (function() {
+        const doc = window.parent.document;
+
+        // 1. Atur viewport agar bisa zoom in/out dengan batas optimal (1.0x sampai 3.0x)
+        let viewport = doc.querySelector('meta[name="viewport"]');
+        if (!viewport) {
+            viewport = doc.createElement('meta');
+            viewport.name = 'viewport';
+            doc.head.appendChild(viewport);
+        }
+        viewport.setAttribute(
+            'content',
+            'width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=3.0, user-scalable=yes'
+        );
+
+        // 2. Kunci input di dalam selectbox agar tidak memunculkan keyboard & kursor di HP
+        function lockSelectInputs() {
+            const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
+            inputs.forEach((el) => {
+                if (el.getAttribute('readonly') !== 'true') {
+                    el.setAttribute('readonly', 'true');
+                    el.setAttribute('inputmode', 'none');
+                    el.style.caretColor = 'transparent';
+                }
+            });
+        }
+
+        lockSelectInputs();
+
+        // Pantau ulang otomatis saat halaman re-render atau pindah menu
+        if (!window.parent.__eegSelectObserver) {
+            const observer = new MutationObserver(() => {
+                lockSelectInputs();
+            });
+            observer.observe(doc.body, { childList: true, subtree: true });
+            window.parent.__eegSelectObserver = observer;
+        }
+    })();
+    </script>
+    """,
+    height=0,
+    width=0,
 )
 
 EEG_CHANNEL_FULL_NAMES = {
@@ -376,7 +433,6 @@ elif menu == "2. Database":
     if not local_files:
         st.warning("No dataset files found in the repository.")
     else:
-        # Bagian 1: Tombol Download Database (.zip)
         zip_data = create_database_zip(local_files, base_dir)
         st.download_button(
             label=f"Download Database ({len(local_files)} files - ZIP)",
@@ -387,7 +443,6 @@ elif menu == "2. Database":
 
         st.divider()
 
-        # Bagian 2: Pengaturan Default Sampling Rate, Select File, dan Select Channel
         file_names = [os.path.basename(p) for p in local_files]
         total_files = len(local_files)
 
@@ -431,7 +486,6 @@ elif menu == "2. Database":
 
             st.divider()
 
-            # Bagian 3: Grafik Hasil Pengolahan
             render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name)
 
         except Exception as e:
@@ -452,7 +506,6 @@ elif menu == "3. Upload":
         key="single_eeg_uploader",
     )
 
-    # Jika 1 file sudah terunggah, kunci kotak dropzone sampai pengguna menekan tombol X atau refresh
     if uploaded_file is not None:
         st.markdown(
             """
