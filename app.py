@@ -1,6 +1,7 @@
 import io
 import os
 import re
+import zipfile
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -10,11 +11,46 @@ from scipy.signal import firwin, filtfilt, medfilt
 from scipy.stats import chi2
 
 # ==============================================================================
-# KONFIGURASI HALAMAN WEB
+# KONFIGURASI HALAMAN WEB & CSS KUSTOM
 # ==============================================================================
 st.set_page_config(
     page_title="EEG Signal Processing Pipeline",
     layout="wide",
+)
+
+# Mengunci input teks pada semua Selectbox (hanya bisa dipilih, tidak bisa diketik/dihapus)
+st.markdown(
+    """
+    <style>
+    div[data-baseweb="select"] input {
+        caret-color: transparent !important;
+        pointer-events: none !important;
+        user-select: none !important;
+    }
+    div[data-baseweb="select"] {
+        cursor: pointer !important;
+    }
+    .a4-paper-slot {
+        width: 100%;
+        max-width: 794px;
+        aspect-ratio: 210 / 297;
+        margin: 16px auto 32px auto;
+        background-color: #ffffff;
+        color: #555555;
+        border: 1px solid #d0d7de;
+        border-radius: 4px;
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+        padding: 48px;
+        box-sizing: border-box;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
 )
 
 EEG_CHANNEL_FULL_NAMES = {
@@ -81,8 +117,19 @@ def get_local_dataset_files(root_dir):
     return file_list
 
 
+@st.cache_data(show_spinner=False)
+def create_database_zip(file_paths, root_dir):
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for path in file_paths:
+            arcname = os.path.relpath(path, root_dir)
+            zf.write(path, arcname)
+    zip_buffer.seek(0)
+    return zip_buffer.getvalue()
+
+
 # ==============================================================================
-# PEMBACA DATASET DARI BYTES (MENDUKUNG FILE UPLOAD & FILE LOKAL)
+# PEMBACA DATASET DARI BYTES
 # ==============================================================================
 @st.cache_data(show_spinner=False)
 def load_eeg_from_bytes(raw_bytes, filename, default_fs=250):
@@ -249,106 +296,211 @@ def create_eeg_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh,
     return fig
 
 
+def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, file_name):
+    n_ch, n_samp = eeg_raw.shape
+    t = np.arange(n_samp) / fs
+    ch_labels = [format_channel_label(c) for c in ch_names]
+
+    with st.spinner("Processing EEG signal..."):
+        eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers = process_pipeline(eeg_raw, fs)
+
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("Channels", n_ch)
+    col2.metric("Sampling Rate", f"{fs} Hz")
+    col3.metric("Duration", f"{t[-1]:.2f} s")
+    col4.metric("Detected Outliers", f"{n_outliers} / {n_samp}")
+
+    fig = create_eeg_figure(
+        t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
+        file_idx, total_files, file_name, ch_idx, n_ch, ch_labels[ch_idx], fs
+    )
+    st.pyplot(fig, use_container_width=True)
+
+    png_buffer = io.BytesIO()
+    fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
+    png_buffer.seek(0)
+    plt.close(fig)
+
+    clean_stem = os.path.splitext(file_name)[0]
+    st.download_button(
+        label="Download Plot as PNG",
+        data=png_buffer,
+        file_name=f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png",
+        mime="image/png",
+    )
+
+
 # ==============================================================================
-# ANTARMUKA PENGGUNA (STREAMLIT UI)
+# SIDEBAR KIRI: JUDUL PIPELINE & 3 PILIHAN MENU
 # ==============================================================================
-st.title("EEG Signal Processing Dashboard")
-st.caption("Pipeline: Median Filter + FIR Hamming Bandpass (0.5–45 Hz) | Signal Space Projection (SSP) & Mahalanobis Distance")
+with st.sidebar:
+    st.markdown("### EEG Signal Processing")
+    st.caption(
+        "Pipeline: Median Filter + FIR Hamming Bandpass (0.5–45 Hz) | "
+        "Signal Space Projection (SSP) & Mahalanobis Distance"
+    )
+    st.divider()
+    menu = st.radio(
+        "Navigation",
+        options=["1. Paper", "2. Database", "3. Upload"],
+        label_visibility="collapsed",
+    )
 
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_files = get_local_dataset_files(base_dir)
 
-with st.sidebar:
-    st.header("Data Source")
-    source_options = ["Upload File(s)"]
-    if local_files:
-        source_options.insert(0, "Repository Dataset")
 
-    data_source = st.radio("Choose input mode:", source_options)
-    default_fs = st.number_input("Default Sampling Rate (Hz)", min_value=64, max_value=2048, value=250, step=1)
+# ==============================================================================
+# BAGIAN TENGAH 1: PAPER (SLOT KOSONG KERTAS A4)
+# ==============================================================================
+if menu == "1. Paper":
+    st.markdown(
+        """
+        <div class="a4-paper-slot">
+            <h3 style="margin-bottom: 12px; color: #333333;">Paper Slot (A4)</h3>
+            <p style="font-size: 14px; color: #777777;">
+                Dokumen paper akan ditampilkan di area ini.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    selected_name = None
-    selected_bytes = None
-    file_idx = 0
-    total_files = 0
 
-    if data_source == "Upload File(s)":
-        uploaded_files = st.file_uploader(
-            "Upload EEG file (.dat, .txt, .csv, .mat)",
-            type=['dat', 'txt', 'csv', 'mat'],
-            accept_multiple_files=True,
+# ==============================================================================
+# BAGIAN TENGAH 2: DATABASE
+# ==============================================================================
+elif menu == "2. Database":
+    st.title("EEG Database")
+
+    if not local_files:
+        st.warning("No dataset files found in the repository.")
+    else:
+        # Bagian 1: Tombol Download Database (.zip)
+        zip_data = create_database_zip(local_files, base_dir)
+        st.download_button(
+            label=f"Download Database ({len(local_files)} files - ZIP)",
+            data=zip_data,
+            file_name="EEG_Dataset_KAU.zip",
+            mime="application/zip",
         )
-        if uploaded_files:
-            total_files = len(uploaded_files)
-            file_names = [f.name for f in uploaded_files]
+
+        st.divider()
+
+        # Bagian 2: Pengaturan Default Sampling Rate, Select File, dan Select Channel
+        file_names = [os.path.basename(p) for p in local_files]
+        total_files = len(local_files)
+
+        c1, c2 = st.columns([1, 2])
+        with c1:
+            default_fs = st.number_input(
+                "Default Sampling Rate (Hz)",
+                min_value=64,
+                max_value=2048,
+                value=250,
+                step=1,
+                key="db_fs",
+            )
+        with c2:
             file_idx = st.selectbox(
-                f"Select File ({total_files} uploaded):",
+                f"Select File ({total_files} available)",
                 options=range(total_files),
                 format_func=lambda i: f"({i+1}/{total_files}) {file_names[i]}",
+                key="db_file",
             )
-            selected_name = uploaded_files[file_idx].name
-            selected_bytes = uploaded_files[file_idx].getvalue()
-    else:
-        total_files = len(local_files)
-        file_names = [os.path.basename(p) for p in local_files]
-        file_idx = st.selectbox(
-            f"Select File ({total_files} available):",
-            options=range(total_files),
-            format_func=lambda i: f"({i+1}/{total_files}) {file_names[i]}",
-        )
+
         selected_path = local_files[file_idx]
         selected_name = os.path.basename(selected_path)
-        with open(selected_path, 'rb') as f:
-            selected_bytes = f.read()
 
-# Eksekusi dan tampilkan hasil jika file tersedia
-if selected_bytes is not None:
-    try:
-        with st.spinner("Processing EEG signal..."):
-            eeg_raw, fs, ch_names = load_eeg_from_bytes(selected_bytes, selected_name, default_fs=int(default_fs))
-            n_ch, n_samp = eeg_raw.shape
-            t = np.arange(n_samp) / fs
-            eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers = process_pipeline(eeg_raw, fs)
+        try:
+            with open(selected_path, 'rb') as f:
+                selected_bytes = f.read()
 
-        with st.sidebar:
-            st.divider()
-            st.header("Channel Selection")
+            eeg_raw, fs, ch_names = load_eeg_from_bytes(
+                selected_bytes, selected_name, default_fs=int(default_fs)
+            )
+            n_ch = eeg_raw.shape[0]
             ch_labels = [format_channel_label(c) for c in ch_names]
+
             ch_idx = st.selectbox(
-                f"Select Channel ({n_ch} total):",
+                f"Select Channel ({n_ch} total)",
                 options=range(n_ch),
                 format_func=lambda i: f"Channel {i+1}/{n_ch} ({ch_labels[i]})",
+                key="db_channel",
             )
 
-        # Ringkasan metrik singkat
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("Channels", n_ch)
-        col2.metric("Sampling Rate", f"{fs} Hz")
-        col3.metric("Duration", f"{t[-1]:.2f} s")
-        col4.metric("Detected Outliers", f"{n_outliers} / {n_samp}")
+            st.divider()
 
-        # Render grafik
-        fig = create_eeg_figure(
-            t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
-            file_idx, total_files, selected_name, ch_idx, n_ch, ch_labels[ch_idx], fs
+            # Bagian 3: Grafik Hasil Pengolahan
+            render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name)
+
+        except Exception as e:
+            st.error(f"Failed to process file `{selected_name}`: {e}")
+
+
+# ==============================================================================
+# BAGIAN TENGAH 3: UPLOAD (TERBATAS 1 FILE SEMENTARA)
+# ==============================================================================
+elif menu == "3. Upload":
+    st.title("Upload EEG File")
+    st.caption("Uploaded files are processed temporarily in memory and are not saved to the database.")
+
+    uploaded_file = st.file_uploader(
+        "Drag and drop or choose 1 EEG file (.dat, .txt, .csv, .mat)",
+        type=['dat', 'txt', 'csv', 'mat'],
+        accept_multiple_files=False,
+        key="single_eeg_uploader",
+    )
+
+    # Jika 1 file sudah terunggah, kunci kotak dropzone sampai pengguna menekan tombol X atau refresh
+    if uploaded_file is not None:
+        st.markdown(
+            """
+            <style>
+            [data-testid="stFileUploaderDropzone"] {
+                pointer-events: none !important;
+                opacity: 0.45 !important;
+            }
+            </style>
+            """,
+            unsafe_allow_html=True,
         )
-        st.pyplot(fig, use_container_width=True)
+        st.info("1 file is currently active. Click the **×** button on the file above (or refresh the page) to upload a different file.")
 
-        # Tombol download gambar PNG
-        png_buffer = io.BytesIO()
-        fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
-        png_buffer.seek(0)
-        plt.close(fig)
+        selected_name = uploaded_file.name
+        selected_bytes = uploaded_file.getvalue()
 
-        clean_stem = os.path.splitext(selected_name)[0]
-        st.download_button(
-            label="Download Plot as PNG",
-            data=png_buffer,
-            file_name=f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png",
-            mime="image/png",
-        )
+        try:
+            c1, c2 = st.columns([1, 2])
+            with c1:
+                default_fs = st.number_input(
+                    "Default Sampling Rate (Hz)",
+                    min_value=64,
+                    max_value=2048,
+                    value=250,
+                    step=1,
+                    key="up_fs",
+                )
 
-    except Exception as e:
-        st.error(f"Failed to process file `{selected_name}`: {e}")
-else:
-    st.info("Upload one or more EEG files (`.dat`, `.txt`, `.csv`, `.mat`) from the sidebar to begin.")
+            eeg_raw, fs, ch_names = load_eeg_from_bytes(
+                selected_bytes, selected_name, default_fs=int(default_fs)
+            )
+            n_ch = eeg_raw.shape[0]
+            ch_labels = [format_channel_label(c) for c in ch_names]
+
+            with c2:
+                ch_idx = st.selectbox(
+                    f"Select Channel ({n_ch} total)",
+                    options=range(n_ch),
+                    format_func=lambda i: f"Channel {i+1}/{n_ch} ({ch_labels[i]})",
+                    key="up_channel",
+                )
+
+            st.divider()
+
+            render_signal_output(eeg_raw, fs, ch_names, ch_idx, 0, 1, selected_name)
+
+        except Exception as e:
+            st.error(f"Failed to process file `{selected_name}`: {e}")
+    else:
+        st.info("Upload 1 EEG file (`.dat`, `.txt`, `.csv`, `.mat`) above to view the processed signal.")
