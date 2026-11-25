@@ -1,3 +1,4 @@
+import base64
 import io
 import os
 import re
@@ -12,7 +13,7 @@ from scipy.signal import firwin, filtfilt, medfilt
 from scipy.stats import chi2
 
 # ==============================================================================
-# KONFIGURASI HALAMAN WEB, CSS KUSTOM & SCRIPT MOBILE (NO KEYBOARD + ZOOM)
+# KONFIGURASI HALAMAN WEB & CSS KUSTOM
 # ==============================================================================
 st.set_page_config(
     page_title="EEG Signal Processing Pipeline",
@@ -22,20 +23,69 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    /* Izinkan gesture pinch-to-zoom di seluruh halaman */
-    html, body, .stApp {
-        touch-action: pan-x pan-y pinch-zoom !important;
+    /* Izinkan scroll halus ke segala arah saat konten utama di-zoom */
+    [data-testid="stMain"] {
+        overflow-x: auto !important;
+        -webkit-overflow-scrolling: touch !important;
     }
 
-    /* Hilangkan kursor ketik dan blokir interaksi teks pada semua Selectbox */
-    div[data-baseweb="select"] input {
-        caret-color: transparent !important;
-        pointer-events: none !important;
-        user-select: none !important;
-        -webkit-user-select: none !important;
+    /* Kartu Header Sidebar Kiri */
+    .sidebar-brand-card {
+        background: linear-gradient(135deg, rgba(59, 130, 246, 0.14) 0%, rgba(16, 185, 129, 0.10) 100%);
+        border: 1px solid rgba(59, 130, 246, 0.30);
+        border-left: 4px solid #3b82f6;
+        border-radius: 12px;
+        padding: 16px 16px 14px 16px;
+        margin-bottom: 18px;
     }
-    div[data-baseweb="select"] {
-        cursor: pointer !important;
+    .sidebar-brand-title {
+        font-size: 1.18rem;
+        font-weight: 700;
+        margin: 0 0 8px 0;
+        letter-spacing: -0.01em;
+    }
+    .sidebar-brand-desc {
+        font-size: 0.83rem;
+        line-height: 1.5;
+        opacity: 0.85;
+        margin: 0;
+    }
+    .sidebar-menu-label {
+        font-size: 0.75rem;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        opacity: 0.6;
+        margin: 4px 0 10px 2px;
+    }
+
+    /* Tombol Navigasi Sidebar rata kiri & modern */
+    section[data-testid="stSidebar"] .stButton > button {
+        justify-content: flex-start !important;
+        text-align: left !important;
+        border-radius: 10px !important;
+        padding: 0.62rem 1rem !important;
+        font-weight: 600 !important;
+        transition: all 0.18s ease !important;
+    }
+
+    /* Daftar pilihan di dalam Popover (pengganti Selectbox tanpa keyboard) */
+    div[data-testid="stPopoverBody"] .stButton > button {
+        justify-content: flex-start !important;
+        text-align: left !important;
+        border-radius: 8px !important;
+        padding: 0.45rem 0.75rem !important;
+        font-size: 0.9rem !important;
+    }
+
+    /* Wadah grafik EEG beresolusi tinggi */
+    .plot-card {
+        width: 100%;
+        border: 1px solid rgba(128, 128, 128, 0.22);
+        border-radius: 10px;
+        padding: 10px;
+        background-color: #ffffff;
+        box-sizing: border-box;
     }
 
     /* Slot kosong berbentuk kertas A4 untuk menu Paper */
@@ -54,7 +104,7 @@ st.markdown(
         align-items: center;
         justify-content: center;
         text-align: center;
-        padding: 48px;
+        padding: 40px;
         box-sizing: border-box;
     }
     </style>
@@ -62,46 +112,132 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Script untuk: (1) mengaktifkan pinch-zoom batas 1x - 3x, (2) mencegah keyboard HP muncul di selectbox
+# ==============================================================================
+# GESTURE ZOOM TANPA TOMBOL (BATAS KETAT 1.0x - 3.0x UNTUK HP & LAPTOP)
+# ==============================================================================
 components.html(
     """
     <script>
     (function() {
-        const doc = window.parent.document;
+        const win = window.parent;
+        const doc = win.document;
+        const MIN_SCALE = 1.0;
+        const MAX_SCALE = 3.0;
 
-        // 1. Atur viewport agar bisa zoom in/out dengan batas optimal (1.0x sampai 3.0x)
-        let viewport = doc.querySelector('meta[name="viewport"]');
-        if (!viewport) {
-            viewport = doc.createElement('meta');
-            viewport.name = 'viewport';
-            doc.head.appendChild(viewport);
+        if (!win.__eegZoomState) {
+            win.__eegZoomState = {
+                scale: 1.0,
+                startDist: 0,
+                startScale: 1.0,
+                toastTimer: null,
+                initialized: false
+            };
         }
-        viewport.setAttribute(
-            'content',
-            'width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=3.0, user-scalable=yes'
-        );
+        const state = win.__eegZoomState;
 
-        // 2. Kunci input di dalam selectbox agar tidak memunculkan keyboard & kursor di HP
-        function lockSelectInputs() {
-            const inputs = doc.querySelectorAll('div[data-baseweb="select"] input');
-            inputs.forEach((el) => {
-                if (el.getAttribute('readonly') !== 'true') {
-                    el.setAttribute('readonly', 'true');
-                    el.setAttribute('inputmode', 'none');
-                    el.style.caretColor = 'transparent';
+        function clamp(val) {
+            return Math.min(MAX_SCALE, Math.max(MIN_SCALE, val));
+        }
+
+        function showToast(scale) {
+            let toast = doc.getElementById('eeg-zoom-toast');
+            if (!toast) {
+                toast = doc.createElement('div');
+                toast.id = 'eeg-zoom-toast';
+                Object.assign(toast.style, {
+                    position: 'fixed',
+                    bottom: '20px',
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    background: 'rgba(15, 23, 42, 0.85)',
+                    color: '#ffffff',
+                    padding: '6px 14px',
+                    borderRadius: '999px',
+                    fontSize: '13px',
+                    fontWeight: '600',
+                    zIndex: '999999',
+                    pointerEvents: 'none',
+                    opacity: '0',
+                    transition: 'opacity 0.2s ease'
+                });
+                doc.body.appendChild(toast);
+            }
+            toast.textContent = scale.toFixed(1) + 'x';
+            toast.style.opacity = '1';
+            clearTimeout(state.toastTimer);
+            state.toastTimer = setTimeout(() => {
+                toast.style.opacity = '0';
+            }, 800);
+        }
+
+        function applyZoom(newScale, withToast) {
+            state.scale = clamp(newScale);
+            const target = doc.querySelector('[data-testid="stMainBlockContainer"]');
+            if (target) {
+                target.style.zoom = state.scale;
+            }
+            if (withToast) {
+                showToast(state.scale);
+            }
+        }
+
+        // Terapkan kembali level zoom saat halaman re-render
+        applyZoom(state.scale, false);
+
+        if (!state.initialized) {
+            state.initialized = true;
+
+            // 1. Pinch-to-Zoom 2 jari di HP
+            doc.addEventListener('touchstart', function(e) {
+                if (e.touches.length === 2) {
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    state.startDist = Math.hypot(dx, dy);
+                    state.startScale = state.scale;
+                }
+            }, { passive: true });
+
+            doc.addEventListener('touchmove', function(e) {
+                if (e.touches.length === 2 && state.startDist > 0) {
+                    e.preventDefault();
+                    const dx = e.touches[0].clientX - e.touches[1].clientX;
+                    const dy = e.touches[0].clientY - e.touches[1].clientY;
+                    const currDist = Math.hypot(dx, dy);
+                    const nextScale = state.startScale * (currDist / state.startDist);
+                    applyZoom(nextScale, true);
+                }
+            }, { passive: false });
+
+            doc.addEventListener('touchend', function(e) {
+                if (e.touches.length < 2) {
+                    state.startDist = 0;
+                }
+            }, { passive: true });
+
+            // 2. Trackpad Pinch & Ctrl+Scroll di Laptop (dibatasi 1x - 3x)
+            win.addEventListener('wheel', function(e) {
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    const step = -e.deltaY * 0.004;
+                    applyZoom(state.scale + step, true);
+                }
+            }, { passive: false });
+
+            // 3. Shortcut Keyboard Ctrl + (+/- / 0) di Laptop (dibatasi 1x - 3x)
+            win.addEventListener('keydown', function(e) {
+                if (e.ctrlKey || e.metaKey) {
+                    if (e.key === '+' || e.key === '=') {
+                        e.preventDefault();
+                        applyZoom(state.scale + 0.25, true);
+                    } else if (e.key === '-' || e.key === '_') {
+                        e.preventDefault();
+                        applyZoom(state.scale - 0.25, true);
+                    } else if (e.key === '0') {
+                        e.preventDefault();
+                        applyZoom(1.0, true);
+                    }
                 }
             });
-        }
-
-        lockSelectInputs();
-
-        // Pantau ulang otomatis saat halaman re-render atau pindah menu
-        if (!window.parent.__eegSelectObserver) {
-            const observer = new MutationObserver(() => {
-                lockSelectInputs();
-            });
-            observer.observe(doc.body, { childList: true, subtree: true });
-            window.parent.__eegSelectObserver = observer;
         }
     })();
     </script>
@@ -109,6 +245,18 @@ components.html(
     height=0,
     width=0,
 )
+
+# ==============================================================================
+# INISIALISASI SESSION STATE
+# ==============================================================================
+if "active_menu" not in st.session_state:
+    st.session_state.active_menu = "1. Paper"
+if "db_file_idx" not in st.session_state:
+    st.session_state.db_file_idx = 0
+if "db_ch_idx" not in st.session_state:
+    st.session_state.db_ch_idx = 0
+if "up_ch_idx" not in st.session_state:
+    st.session_state.up_ch_idx = 0
 
 EEG_CHANNEL_FULL_NAMES = {
     'FP1': 'Left Frontopolar',
@@ -183,6 +331,35 @@ def create_database_zip(file_paths, root_dir):
             zf.write(path, arcname)
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
+
+
+# ==============================================================================
+# KOMPONEN DROPDOWN TANPA KEYBOARD & KURSOR (POPOVER + TOMBOL PILIHAN)
+# ==============================================================================
+def no_keyboard_dropdown(label, options, state_key, reset_key=None):
+    st.markdown(f"<div style='font-size:0.875rem; margin-bottom:0.35rem;'>{label}</div>", unsafe_allow_html=True)
+    idx = st.session_state.get(state_key, 0)
+    if idx >= len(options):
+        idx = 0
+        st.session_state[state_key] = 0
+
+    with st.popover(options[idx], use_container_width=True):
+        box_height = min(280, max(90, len(options) * 44))
+        with st.container(height=box_height, border=False):
+            for i, opt in enumerate(options):
+                is_selected = (i == idx)
+                if st.button(
+                    opt,
+                    key=f"{state_key}_opt_{i}",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                ):
+                    st.session_state[state_key] = i
+                    if reset_key is not None:
+                        st.session_state[reset_key] = 0
+                    st.rerun()
+
+    return st.session_state[state_key]
 
 
 # ==============================================================================
@@ -353,7 +530,7 @@ def create_eeg_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh,
     return fig
 
 
-def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, file_name):
+def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, file_name, key_prefix):
     n_ch, n_samp = eeg_raw.shape
     t = np.arange(n_samp) / fs
     ch_labels = [format_channel_label(c) for c in ch_names]
@@ -371,38 +548,69 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
         t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
         file_idx, total_files, file_name, ch_idx, n_ch, ch_labels[ch_idx], fs
     )
-    st.pyplot(fig, use_container_width=True)
 
     png_buffer = io.BytesIO()
-    fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
-    png_buffer.seek(0)
+    fig.savefig(png_buffer, format='png', dpi=250, bbox_inches='tight')
     plt.close(fig)
+    png_bytes = png_buffer.getvalue()
+    img_b64 = base64.b64encode(png_bytes).decode("utf-8")
 
+    st.markdown(
+        f"""
+        <div class="plot-card">
+            <img src="data:image/png;base64,{img_b64}"
+                 style="display: block; width: 100%; height: auto;" />
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.write("")
     clean_stem = os.path.splitext(file_name)[0]
     st.download_button(
         label="Download Plot as PNG",
-        data=png_buffer,
+        data=png_bytes,
         file_name=f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png",
         mime="image/png",
+        key=f"{key_prefix}_dl_png",
     )
 
 
 # ==============================================================================
-# SIDEBAR KIRI: JUDUL PIPELINE & 3 PILIHAN MENU
+# SIDEBAR KIRI: KARTU HEADER MENARIK & 3 MENU NAVIGASI
 # ==============================================================================
 with st.sidebar:
-    st.markdown("### EEG Signal Processing")
-    st.caption(
-        "Pipeline: Median Filter + FIR Hamming Bandpass (0.5–45 Hz) | "
-        "Signal Space Projection (SSP) & Mahalanobis Distance"
-    )
-    st.divider()
-    menu = st.radio(
-        "Navigation",
-        options=["1. Paper", "2. Database", "3. Upload"],
-        label_visibility="collapsed",
+    st.markdown(
+        """
+        <div class="sidebar-brand-card">
+            <div class="sidebar-brand-title">EEG Signal Processing</div>
+            <p class="sidebar-brand-desc">
+                Pipeline: Median Filter + FIR Hamming Bandpass (0.5–45 Hz) |
+                Signal Space Projection (SSP) &amp; Mahalanobis Distance
+            </p>
+        </div>
+        <div class="sidebar-menu-label">Navigation</div>
+        """,
+        unsafe_allow_html=True,
     )
 
+    menu_items = [
+        ("1. Paper", "📄  1. Paper"),
+        ("2. Database", "🗄️  2. Database"),
+        ("3. Upload", "📤  3. Upload"),
+    ]
+    for menu_value, menu_label in menu_items:
+        is_active = (st.session_state.active_menu == menu_value)
+        if st.button(
+            menu_label,
+            key=f"nav_{menu_value}",
+            use_container_width=True,
+            type="primary" if is_active else "secondary",
+        ):
+            st.session_state.active_menu = menu_value
+            st.rerun()
+
+menu = st.session_state.active_menu
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_files = get_local_dataset_files(base_dir)
 
@@ -445,6 +653,7 @@ elif menu == "2. Database":
 
         file_names = [os.path.basename(p) for p in local_files]
         total_files = len(local_files)
+        file_options = [f"({i+1}/{total_files}) {file_names[i]}" for i in range(total_files)]
 
         c1, c2 = st.columns([1, 2])
         with c1:
@@ -457,11 +666,11 @@ elif menu == "2. Database":
                 key="db_fs",
             )
         with c2:
-            file_idx = st.selectbox(
+            file_idx = no_keyboard_dropdown(
                 f"Select File ({total_files} available)",
-                options=range(total_files),
-                format_func=lambda i: f"({i+1}/{total_files}) {file_names[i]}",
-                key="db_file",
+                file_options,
+                state_key="db_file_idx",
+                reset_key="db_ch_idx",
             )
 
         selected_path = local_files[file_idx]
@@ -476,17 +685,19 @@ elif menu == "2. Database":
             )
             n_ch = eeg_raw.shape[0]
             ch_labels = [format_channel_label(c) for c in ch_names]
+            ch_options = [f"Channel {i+1}/{n_ch} ({ch_labels[i]})" for i in range(n_ch)]
 
-            ch_idx = st.selectbox(
+            ch_idx = no_keyboard_dropdown(
                 f"Select Channel ({n_ch} total)",
-                options=range(n_ch),
-                format_func=lambda i: f"Channel {i+1}/{n_ch} ({ch_labels[i]})",
-                key="db_channel",
+                ch_options,
+                state_key="db_ch_idx",
             )
 
             st.divider()
 
-            render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name)
+            render_signal_output(
+                eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name, key_prefix="db"
+            )
 
         except Exception as e:
             st.error(f"Failed to process file `{selected_name}`: {e}")
@@ -540,18 +751,20 @@ elif menu == "3. Upload":
             )
             n_ch = eeg_raw.shape[0]
             ch_labels = [format_channel_label(c) for c in ch_names]
+            ch_options = [f"Channel {i+1}/{n_ch} ({ch_labels[i]})" for i in range(n_ch)]
 
             with c2:
-                ch_idx = st.selectbox(
+                ch_idx = no_keyboard_dropdown(
                     f"Select Channel ({n_ch} total)",
-                    options=range(n_ch),
-                    format_func=lambda i: f"Channel {i+1}/{n_ch} ({ch_labels[i]})",
-                    key="up_channel",
+                    ch_options,
+                    state_key="up_ch_idx",
                 )
 
             st.divider()
 
-            render_signal_output(eeg_raw, fs, ch_names, ch_idx, 0, 1, selected_name)
+            render_signal_output(
+                eeg_raw, fs, ch_names, ch_idx, 0, 1, selected_name, key_prefix="up"
+            )
 
         except Exception as e:
             st.error(f"Failed to process file `{selected_name}`: {e}")
