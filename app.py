@@ -18,18 +18,24 @@ st.set_page_config(
     layout="wide",
 )
 
-# Mengunci input teks pada semua Selectbox (hanya bisa dipilih, tidak bisa diketik/dihapus)
 st.markdown(
     """
     <style>
-    div[data-baseweb="select"] input {
-        caret-color: transparent !important;
-        pointer-events: none !important;
-        user-select: none !important;
+    /* Daftar pilihan di dalam dropdown popover rata kiri */
+    div[data-testid="stPopoverBody"] .stButton > button {
+        justify-content: flex-start !important;
+        text-align: left !important;
+        border-radius: 8px !important;
+        padding: 0.45rem 0.75rem !important;
     }
-    div[data-baseweb="select"] {
-        cursor: pointer !important;
+
+    /* Memperlebar modal pop-up menjadi hampir full screen */
+    div[data-testid="stDialog"] div[role="dialog"] {
+        width: 96vw !important;
+        max-width: 96vw !important;
     }
+
+    /* Slot kosong berbentuk kertas A4 */
     .a4-paper-slot {
         width: 100%;
         max-width: 794px;
@@ -52,6 +58,33 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
+
+# ==============================================================================
+# INISIALISASI SESSION STATE (SWITCH MENU & DROPDOWN)
+# ==============================================================================
+MENU_OPTIONS = ["1. Paper", "2. Database", "3. Upload"]
+
+if "active_menu" not in st.session_state:
+    st.session_state.active_menu = "1. Paper"
+
+for opt in MENU_OPTIONS:
+    switch_key = f"switch_{opt}"
+    if switch_key not in st.session_state:
+        st.session_state[switch_key] = (st.session_state.active_menu == opt)
+
+if "db_file_idx" not in st.session_state:
+    st.session_state.db_file_idx = 0
+if "db_ch_idx" not in st.session_state:
+    st.session_state.db_ch_idx = 0
+if "up_ch_idx" not in st.session_state:
+    st.session_state.up_ch_idx = 0
+
+
+def on_switch_menu(chosen_menu):
+    st.session_state.active_menu = chosen_menu
+    for opt in MENU_OPTIONS:
+        st.session_state[f"switch_{opt}"] = (opt == chosen_menu)
+
 
 EEG_CHANNEL_FULL_NAMES = {
     'FP1': 'Left Frontopolar',
@@ -126,6 +159,46 @@ def create_database_zip(file_paths, root_dir):
             zf.write(path, arcname)
     zip_buffer.seek(0)
     return zip_buffer.getvalue()
+
+
+# ==============================================================================
+# DROPDOWN TANPA KEYBOARD & KURSOR (HANYA BISA DIPILIH)
+# ==============================================================================
+def readonly_dropdown(label, options, state_key, reset_key=None):
+    st.markdown(
+        f"<div style='font-size:0.875rem; margin-bottom:0.35rem;'>{label}</div>",
+        unsafe_allow_html=True,
+    )
+    idx = st.session_state.get(state_key, 0)
+    if idx >= len(options):
+        idx = 0
+        st.session_state[state_key] = 0
+
+    with st.popover(options[idx], use_container_width=True):
+        box_height = min(280, max(90, len(options) * 44))
+        with st.container(height=box_height, border=False):
+            for i, opt in enumerate(options):
+                is_selected = (i == idx)
+                if st.button(
+                    opt,
+                    key=f"{state_key}_opt_{i}",
+                    use_container_width=True,
+                    type="primary" if is_selected else "secondary",
+                ):
+                    st.session_state[state_key] = i
+                    if reset_key is not None:
+                        st.session_state[reset_key] = 0
+                    st.rerun()
+
+    return st.session_state[state_key]
+
+
+# ==============================================================================
+# POP-UP FULL SCREEN GAMBAR
+# ==============================================================================
+@st.dialog("Full Screen EEG Plot", width="large")
+def show_fullscreen_plot(png_bytes, caption_text):
+    st.image(png_bytes, caption=caption_text, use_container_width=True)
 
 
 # ==============================================================================
@@ -296,7 +369,7 @@ def create_eeg_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh,
     return fig
 
 
-def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, file_name):
+def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, file_name, key_prefix):
     n_ch, n_samp = eeg_raw.shape
     t = np.arange(n_samp) / fs
     ch_labels = [format_channel_label(c) for c in ch_names]
@@ -318,20 +391,32 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
 
     png_buffer = io.BytesIO()
     fig.savefig(png_buffer, format='png', dpi=300, bbox_inches='tight')
-    png_buffer.seek(0)
+    png_bytes = png_buffer.getvalue()
     plt.close(fig)
 
     clean_stem = os.path.splitext(file_name)[0]
-    st.download_button(
-        label="Download Plot as PNG",
-        data=png_buffer,
-        file_name=f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png",
-        mime="image/png",
-    )
+    btn_col1, btn_col2, _ = st.columns([1.4, 1.4, 3.2])
+    with btn_col1:
+        st.download_button(
+            label="Download Plot as PNG",
+            data=png_bytes,
+            file_name=f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png",
+            mime="image/png",
+            use_container_width=True,
+            key=f"{key_prefix}_dl_png",
+        )
+    with btn_col2:
+        if st.button(
+            "Full Screen",
+            use_container_width=True,
+            key=f"{key_prefix}_fullscreen_btn",
+        ):
+            caption = f"({file_idx+1}/{total_files}) {file_name} | Channel {ch_idx+1}/{n_ch} ({ch_labels[ch_idx]}) | fs = {fs} Hz"
+            show_fullscreen_plot(png_bytes, caption)
 
 
 # ==============================================================================
-# SIDEBAR KIRI: JUDUL PIPELINE & 3 PILIHAN MENU
+# SIDEBAR KIRI: JUDUL PIPELINE & 3 SWITCH NAVIGASI
 # ==============================================================================
 with st.sidebar:
     st.markdown("### EEG Signal Processing")
@@ -340,12 +425,15 @@ with st.sidebar:
         "Signal Space Projection (SSP) & Mahalanobis Distance"
     )
     st.divider()
-    menu = st.radio(
-        "Navigation",
-        options=["1. Paper", "2. Database", "3. Upload"],
-        label_visibility="collapsed",
-    )
+    for opt in MENU_OPTIONS:
+        st.toggle(
+            opt,
+            key=f"switch_{opt}",
+            on_change=on_switch_menu,
+            args=(opt,),
+        )
 
+menu = st.session_state.active_menu
 base_dir = os.path.dirname(os.path.abspath(__file__))
 local_files = get_local_dataset_files(base_dir)
 
@@ -376,7 +464,6 @@ elif menu == "2. Database":
     if not local_files:
         st.warning("No dataset files found in the repository.")
     else:
-        # Bagian 1: Tombol Download Database (.zip)
         zip_data = create_database_zip(local_files, base_dir)
         st.download_button(
             label=f"Download Database ({len(local_files)} files - ZIP)",
@@ -387,9 +474,9 @@ elif menu == "2. Database":
 
         st.divider()
 
-        # Bagian 2: Pengaturan Default Sampling Rate, Select File, dan Select Channel
         file_names = [os.path.basename(p) for p in local_files]
         total_files = len(local_files)
+        file_options = [f"({i+1}/{total_files}) {file_names[i]}" for i in range(total_files)]
 
         c1, c2 = st.columns([1, 2])
         with c1:
@@ -399,14 +486,15 @@ elif menu == "2. Database":
                 max_value=2048,
                 value=250,
                 step=1,
+                disabled=True,
                 key="db_fs",
             )
         with c2:
-            file_idx = st.selectbox(
+            file_idx = readonly_dropdown(
                 f"Select File ({total_files} available)",
-                options=range(total_files),
-                format_func=lambda i: f"({i+1}/{total_files}) {file_names[i]}",
-                key="db_file",
+                file_options,
+                state_key="db_file_idx",
+                reset_key="db_ch_idx",
             )
 
         selected_path = local_files[file_idx]
@@ -421,18 +509,19 @@ elif menu == "2. Database":
             )
             n_ch = eeg_raw.shape[0]
             ch_labels = [format_channel_label(c) for c in ch_names]
+            ch_options = [f"Channel {i+1}/{n_ch} ({ch_labels[i]})" for i in range(n_ch)]
 
-            ch_idx = st.selectbox(
+            ch_idx = readonly_dropdown(
                 f"Select Channel ({n_ch} total)",
-                options=range(n_ch),
-                format_func=lambda i: f"Channel {i+1}/{n_ch} ({ch_labels[i]})",
-                key="db_channel",
+                ch_options,
+                state_key="db_ch_idx",
             )
 
             st.divider()
 
-            # Bagian 3: Grafik Hasil Pengolahan
-            render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name)
+            render_signal_output(
+                eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name, key_prefix="db"
+            )
 
         except Exception as e:
             st.error(f"Failed to process file `{selected_name}`: {e}")
@@ -452,7 +541,6 @@ elif menu == "3. Upload":
         key="single_eeg_uploader",
     )
 
-    # Jika 1 file sudah terunggah, kunci kotak dropzone sampai pengguna menekan tombol X atau refresh
     if uploaded_file is not None:
         st.markdown(
             """
@@ -479,6 +567,7 @@ elif menu == "3. Upload":
                     max_value=2048,
                     value=250,
                     step=1,
+                    disabled=True,
                     key="up_fs",
                 )
 
@@ -487,18 +576,20 @@ elif menu == "3. Upload":
             )
             n_ch = eeg_raw.shape[0]
             ch_labels = [format_channel_label(c) for c in ch_names]
+            ch_options = [f"Channel {i+1}/{n_ch} ({ch_labels[i]})" for i in range(n_ch)]
 
             with c2:
-                ch_idx = st.selectbox(
+                ch_idx = readonly_dropdown(
                     f"Select Channel ({n_ch} total)",
-                    options=range(n_ch),
-                    format_func=lambda i: f"Channel {i+1}/{n_ch} ({ch_labels[i]})",
-                    key="up_channel",
+                    ch_options,
+                    state_key="up_ch_idx",
                 )
 
             st.divider()
 
-            render_signal_output(eeg_raw, fs, ch_names, ch_idx, 0, 1, selected_name)
+            render_signal_output(
+                eeg_raw, fs, ch_names, ch_idx, 0, 1, selected_name, key_prefix="up"
+            )
 
         except Exception as e:
             st.error(f"Failed to process file `{selected_name}`: {e}")
