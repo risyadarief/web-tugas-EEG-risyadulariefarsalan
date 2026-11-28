@@ -194,9 +194,16 @@ st.markdown(
 )
 
 # ==============================================================================
-# INISIALISASI SESSION STATE
+# INISIALISASI SESSION STATE & KONSTANTA
 # ==============================================================================
 MENU_OPTIONS = ["1. Paper", "2. Database", "3. Upload"]
+
+STAGE_TITLES = [
+    "1. Raw EEG Signal (All Channels Stacked)",
+    "2. Filtering Result: Median Filter (k=3) + FIR Hamming Bandpass (0.5 - 45 Hz)",
+    "3. Preprocessing Result: Signal Space Projection (SSP) & Mahalanobis Distance",
+    "4. Multivariate Outlier Detection (Mahalanobis Distance)",
+]
 
 if "active_menu" not in st.session_state:
     st.session_state.active_menu = "1. Paper"
@@ -204,8 +211,12 @@ if "db_file_idx" not in st.session_state:
     st.session_state.db_file_idx = 0
 if "db_ch_idx" not in st.session_state:
     st.session_state.db_ch_idx = 0
+if "db_stage_idx" not in st.session_state:
+    st.session_state.db_stage_idx = 0
 if "up_ch_idx" not in st.session_state:
     st.session_state.up_ch_idx = 0
+if "up_stage_idx" not in st.session_state:
+    st.session_state.up_stage_idx = 0
 
 EEG_CHANNEL_FULL_NAMES = {
     'FP1': 'Left Frontopolar',
@@ -479,6 +490,9 @@ def process_pipeline(eeg_raw, fs):
     return filtered_data, eeg_final, md, threshold, int(np.sum(outlier_mask))
 
 
+# ==============================================================================
+# PLOT 1: MODE SINGLE CHANNEL (4 SUBPLOT UNTUK 1 KANAL)
+# ==============================================================================
 def create_eeg_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
                       file_idx, total_files, file_name, ch_idx, n_ch, ch_label, fs):
     fig, axes = plt.subplots(4, 1, figsize=(13, 9.2), sharex=True)
@@ -508,6 +522,7 @@ def create_eeg_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh,
     axes[3].plot(t, md_scores, color='darkorange', linewidth=0.8, label='Mahalanobis Distance')
     axes[3].axhline(md_thresh, color='red', linestyle='--', label=f'Threshold ({md_thresh:.2f}) | Outliers: {n_outliers}')
     axes[3].set_title('4. Multivariate Outlier Detection (Mahalanobis Distance)')
+    axes[3].set_xlabel('Time (s)')
     axes[3].set_ylabel('Distance (D)')
     axes[3].legend(loc='upper right')
     axes[3].grid(True, linestyle='--', alpha=0.5)
@@ -516,7 +531,97 @@ def create_eeg_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh,
     return fig
 
 
-def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, file_name, key_prefix):
+# ==============================================================================
+# PLOT 2: MODE ALL CHANNELS (SEMUA KANAL TERSUSUN VERTIKAL PER TAHAP)
+# ==============================================================================
+def plot_stacked_channels(ax, t, data, ch_names, color):
+    n_ch = data.shape[0]
+    centered = data - np.median(data, axis=1, keepdims=True)
+    robust_scale = np.percentile(np.abs(centered), 98)
+    spacing = max(float(robust_scale * 2.2), 1.0)
+
+    offsets = [(n_ch - 1 - ch) * spacing for ch in range(n_ch)]
+    for ch in range(n_ch):
+        ax.axhline(offsets[ch], color='#e5e7eb', linewidth=0.6, zorder=1)
+        ax.plot(t, centered[ch] + offsets[ch], color=color, linewidth=0.65, zorder=2)
+
+    ax.set_yticks(offsets)
+    ax.set_yticklabels([f"{i+1:02d}. {name}" for i, name in enumerate(ch_names)], fontsize=8.5)
+    ax.set_ylim(-0.8 * spacing, (n_ch - 0.2) * spacing)
+    ax.set_xlim(t[0], t[-1])
+    ax.set_xlabel('Time (s)', fontsize=9.5)
+    ax.set_ylabel('EEG Channels (Top to Bottom)', fontsize=9.5)
+    ax.grid(True, axis='x', linestyle='--', alpha=0.5)
+    return spacing, float(np.min(data)), float(np.max(data))
+
+
+def create_all_channels_figure(t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh,
+                               n_outliers, file_idx, total_files, file_name, ch_names, fs, stage_idx):
+    n_ch, n_samp = eeg_raw.shape
+    duration = t[-1]
+
+    fig, ax = plt.subplots(figsize=(14, 9.0))
+    plt.subplots_adjust(top=0.81, bottom=0.08, left=0.08, right=0.97)
+
+    header = (
+        f"Dataset ({file_idx+1}/{total_files}): {file_name}\n"
+        f"Page ({stage_idx+1}/4): {STAGE_TITLES[stage_idx]}"
+    )
+    fig.suptitle(header, fontsize=10.5, fontweight='bold', y=0.975, va='top')
+
+    if stage_idx == 0:
+        spacing, amp_min, amp_max = plot_stacked_channels(ax, t, eeg_raw, ch_names, color='#4b5563')
+        param_str = (
+            f"Time Range: 0.00 – {duration:.2f} s ({n_samp:,} samples)  |  "
+            f"Sampling Rate (fs): {fs} Hz  |  Channels: {n_ch} ({ch_names[0]}–{ch_names[-1]})\n"
+            f"Amplitude Range: {amp_min:.1f} to {amp_max:.1f} uV  |  "
+            f"Vertical Spacing: {spacing:.1f} uV/ch  |  Stage: Unfiltered Raw Signal"
+        )
+    elif stage_idx == 1:
+        spacing, amp_min, amp_max = plot_stacked_channels(ax, t, eeg_filtered, ch_names, color='steelblue')
+        param_str = (
+            f"Time Range: 0.00 – {duration:.2f} s ({n_samp:,} samples)  |  "
+            f"Sampling Rate (fs): {fs} Hz  |  Channels: {n_ch} ({ch_names[0]}–{ch_names[-1]})\n"
+            f"Filter Range: 0.5 – 45.0 Hz (FIR Hamming + Median k=3)  |  "
+            f"Amplitude Range: {amp_min:.1f} to {amp_max:.1f} uV  |  Spacing: {spacing:.1f} uV/ch"
+        )
+    elif stage_idx == 2:
+        spacing, amp_min, amp_max = plot_stacked_channels(ax, t, eeg_final, ch_names, color='forestgreen')
+        outlier_pct = (n_outliers / n_samp) * 100.0
+        param_str = (
+            f"Time Range: 0.00 – {duration:.2f} s ({n_samp:,} samples)  |  "
+            f"Sampling Rate (fs): {fs} Hz  |  Channels: {n_ch} ({ch_names[0]}–{ch_names[-1]})\n"
+            f"SSP: 1st SVD Removed  |  Outliers Cleaned: {n_outliers}/{n_samp} ({outlier_pct:.2f}%)  |  "
+            f"Amplitude Range: {amp_min:.1f} to {amp_max:.1f} uV  |  Spacing: {spacing:.1f} uV/ch"
+        )
+    else:
+        outlier_pct = (n_outliers / n_samp) * 100.0
+        ax.plot(t, md_scores, color='darkorange', linewidth=0.85, label='Mahalanobis Distance (D)')
+        ax.axhline(
+            md_thresh, color='red', linestyle='--', linewidth=1.2,
+            label=f'Chi-Square Threshold (p=0.999, df={n_ch}): {md_thresh:.2f}'
+        )
+        ax.set_xlim(t[0], t[-1])
+        ax.set_xlabel('Time (s)', fontsize=9.5)
+        ax.set_ylabel('Mahalanobis Distance (D)', fontsize=9.5)
+        ax.legend(loc='upper right', fontsize=9)
+        ax.grid(True, linestyle='--', alpha=0.5)
+        param_str = (
+            f"Time Range: 0.00 – {duration:.2f} s ({n_samp:,} samples)  |  "
+            f"Sampling Rate (fs): {fs} Hz  |  Channels: {n_ch} (Multivariate df={n_ch})\n"
+            f"Distance Range: {np.min(md_scores):.2f} – {np.max(md_scores):.2f}  |  "
+            f"Threshold: {md_thresh:.2f}  |  Detected Outliers: {n_outliers}/{n_samp} ({outlier_pct:.2f}%)"
+        )
+
+    fig.text(
+        0.5, 0.895, param_str, ha='center', va='top', fontsize=8.3,
+        bbox=dict(boxstyle='round,pad=0.4', facecolor='#f3f4f6', edgecolor='#d1d5db')
+    )
+    return fig
+
+
+def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files,
+                         file_name, key_prefix, view_mode="Single Channel", stage_idx=0):
     n_ch, n_samp = eeg_raw.shape
     t = np.arange(n_samp) / fs
     ch_labels = [format_channel_label(c) for c in ch_names]
@@ -530,10 +635,23 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
     col3.metric("Duration", f"{t[-1]:.2f} s")
     col4.metric("Detected Outliers", f"{n_outliers} / {n_samp}")
 
-    fig = create_eeg_figure(
-        t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
-        file_idx, total_files, file_name, ch_idx, n_ch, ch_labels[ch_idx], fs
-    )
+    clean_stem = os.path.splitext(file_name)[0]
+
+    if view_mode == "All Channels":
+        fig = create_all_channels_figure(
+            t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
+            file_idx, total_files, file_name, ch_names, fs, stage_idx
+        )
+        png_filename = f"{clean_stem}_AllChannels_Page{stage_idx+1}.png"
+        caption = f"({file_idx+1}/{total_files}) {file_name} | {STAGE_TITLES[stage_idx]} | fs = {fs} Hz"
+    else:
+        fig = create_eeg_figure(
+            t, eeg_raw, eeg_filtered, eeg_final, md_scores, md_thresh, n_outliers,
+            file_idx, total_files, file_name, ch_idx, n_ch, ch_labels[ch_idx], fs
+        )
+        png_filename = f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png"
+        caption = f"({file_idx+1}/{total_files}) {file_name} | Channel {ch_idx+1}/{n_ch} ({ch_labels[ch_idx]}) | fs = {fs} Hz"
+
     st.pyplot(fig, use_container_width=True)
 
     png_buffer = io.BytesIO()
@@ -541,13 +659,12 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
     png_bytes = png_buffer.getvalue()
     plt.close(fig)
 
-    clean_stem = os.path.splitext(file_name)[0]
     btn_col1, btn_col2, _ = st.columns([1.4, 1.4, 3.2])
     with btn_col1:
         st.download_button(
             label="Download Plot as PNG",
             data=png_bytes,
-            file_name=f"{clean_stem}_Ch{ch_idx+1}_{ch_names[ch_idx]}.png",
+            file_name=png_filename,
             mime="image/png",
             use_container_width=True,
             key=f"{key_prefix}_dl_png",
@@ -558,7 +675,6 @@ def render_signal_output(eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, f
             use_container_width=True,
             key=f"{key_prefix}_fullscreen_btn",
         ):
-            caption = f"({file_idx+1}/{total_files}) {file_name} | Channel {ch_idx+1}/{n_ch} ({ch_labels[ch_idx]}) | fs = {fs} Hz"
             show_fullscreen_plot(png_bytes, caption)
 
 
@@ -641,7 +757,6 @@ if menu == "1. Paper":
                     unsafe_allow_html=True,
                 )
         else:
-            # Fallback jika PyMuPDF belum terinstal di environment
             pdf_b64 = base64.b64encode(pdf_bytes).decode("utf-8")
             st.markdown(
                 f"""
@@ -655,7 +770,6 @@ if menu == "1. Paper":
                 unsafe_allow_html=True,
             )
 
-        # Tombol Download Paper di bawah tampilan paper
         _, dl_col, _ = st.columns([1, 2, 1])
         with dl_col:
             st.download_button(
@@ -694,6 +808,13 @@ elif menu == "2. Database":
             data=zip_data,
             file_name="EEG_Dataset_KAU.zip",
             mime="application/zip",
+        )
+
+        db_view_mode = st.radio(
+            "EEG Output Mode",
+            options=["All Channels", "Single Channel"],
+            horizontal=True,
+            key="db_view_mode",
         )
 
         st.divider()
@@ -735,16 +856,26 @@ elif menu == "2. Database":
             ch_labels = [format_channel_label(c) for c in ch_names]
             ch_options = [f"Channel {i+1}/{n_ch} ({ch_labels[i]})" for i in range(n_ch)]
 
-            ch_idx = readonly_dropdown(
-                f"Select Channel ({n_ch} total)",
-                ch_options,
-                state_key="db_ch_idx",
-            )
+            if db_view_mode == "Single Channel":
+                ch_idx = readonly_dropdown(
+                    f"Select Channel ({n_ch} total)",
+                    ch_options,
+                    state_key="db_ch_idx",
+                )
+                stage_idx = 0
+            else:
+                stage_idx = readonly_dropdown(
+                    "Select Output Page (4 stages)",
+                    STAGE_TITLES,
+                    state_key="db_stage_idx",
+                )
+                ch_idx = 0
 
             st.divider()
 
             render_signal_output(
-                eeg_raw, fs, ch_names, ch_idx, file_idx, total_files, selected_name, key_prefix="db"
+                eeg_raw, fs, ch_names, ch_idx, file_idx, total_files,
+                selected_name, key_prefix="db", view_mode=db_view_mode, stage_idx=stage_idx
             )
 
         except Exception as e:
@@ -779,6 +910,13 @@ elif menu == "3. Upload":
         )
         st.info("1 file is currently active. Click the **×** button on the file above (or refresh the page) to upload a different file.")
 
+        up_view_mode = st.radio(
+            "EEG Output Mode",
+            options=["All Channels", "Single Channel"],
+            horizontal=True,
+            key="up_view_mode",
+        )
+
         selected_name = uploaded_file.name
         selected_bytes = uploaded_file.getvalue()
 
@@ -803,16 +941,26 @@ elif menu == "3. Upload":
             ch_options = [f"Channel {i+1}/{n_ch} ({ch_labels[i]})" for i in range(n_ch)]
 
             with c2:
-                ch_idx = readonly_dropdown(
-                    f"Select Channel ({n_ch} total)",
-                    ch_options,
-                    state_key="up_ch_idx",
-                )
+                if up_view_mode == "Single Channel":
+                    ch_idx = readonly_dropdown(
+                        f"Select Channel ({n_ch} total)",
+                        ch_options,
+                        state_key="up_ch_idx",
+                    )
+                    stage_idx = 0
+                else:
+                    stage_idx = readonly_dropdown(
+                        "Select Output Page (4 stages)",
+                        STAGE_TITLES,
+                        state_key="up_stage_idx",
+                    )
+                    ch_idx = 0
 
             st.divider()
 
             render_signal_output(
-                eeg_raw, fs, ch_names, ch_idx, 0, 1, selected_name, key_prefix="up"
+                eeg_raw, fs, ch_names, ch_idx, 0, 1,
+                selected_name, key_prefix="up", view_mode=up_view_mode, stage_idx=stage_idx
             )
 
         except Exception as e:
